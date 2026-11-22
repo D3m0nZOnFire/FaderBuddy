@@ -46,7 +46,7 @@
  * different version without touching this default.
  */
 #define FW_VERSION_MAJOR (1)
-#define FW_VERSION_MINOR (55)  // local test build, not an upstream release
+#define FW_VERSION_MINOR (58)  // local test build, not an upstream release
 #ifndef FW_VERSION
 #define FW_VERSION ((FW_VERSION_MAJOR << 8) | FW_VERSION_MINOR)
 #endif
@@ -318,6 +318,7 @@ enum HapticMode : uint8_t {
   HAPTIC_NO_HAPTICS              = 0,
   HAPTIC_SMOOTH_WITH_MAGNET_ENDS = 1,
   HAPTIC_DETENTS                 = 2,
+  HAPTIC_SPRING_TO_MIN           = 3,  // local test build 1.56+: elastic pull to the bottom, stronger further up
 };
 
 

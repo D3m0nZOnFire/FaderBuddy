@@ -24,6 +24,7 @@
 #include "util.h"
 #include "motor_cal.h"
 #include "motor_control.h"
+#include "haptic_spring.h"
 
 // App metadata footer for the I2C bootloader host (see BL_APP_META_ADDR):
 // the two bytes at the fixed end-of-flash address, always equal to the same
@@ -1097,9 +1098,17 @@ void motor_update() {
           } else {
             motor_coast();
           }
-        } else if (haptic_mode == HAPTIC_DETENTS) {
-          uint8_t detent_count = (haptic_config & HAPTIC_DETENT_COUNT_bm) >> HAPTIC_DETENT_COUNT_bp;
-          haptic_pull(get_nearest_detent_position(detent_count, input_ewma), limit);
+        } else if (haptic_mode == HAPTIC_DETENTS || haptic_mode == HAPTIC_SPRING_TO_MIN) {
+          // One haptic_pull call site for both (flash is tight): the spring pulls to
+          // the bottom with a cap that grows with the distance from it.
+          uint16_t target = input_calib_min;
+          if (haptic_mode == HAPTIC_DETENTS) {
+            uint8_t detent_count = (haptic_config & HAPTIC_DETENT_COUNT_bm) >> HAPTIC_DETENT_COUNT_bp;
+            target = get_nearest_detent_position(detent_count, input_ewma);
+          } else {
+            limit = spring_cap(layer_restore_positions[active_layer], (int16_t)move_bd[MOTORCAL_FALLING], limit);  // pos 0-255 set just above
+          }
+          haptic_pull(target, limit);
         } else {
           // No haptics for NO_HAPTICS mode
           motor_coast();
