@@ -1240,9 +1240,10 @@ void setup() {
   // Set up TCA0 for high-frequency PWM
   setup_tca0();
   
-  // Direct to the port, as in loop(): these two calls are the only reason
-  // digitalWrite() would be linked in at all, and it costs 160 bytes.
-  VPORTB.OUT |= MOTOR_nSLEEP_bm | LED_bm;
+  // Direct to the port: digitalWrite() would cost 160 bytes. The debug LED
+  // stays off (local build 1.59: a dark desk mixer), its pin driven low.
+  VPORTB.OUT |= MOTOR_nSLEEP_bm;
+  VPORTB.OUT &= ~LED_bm;
 
   // Init ADC1 for free-running motor fader input.
   // Using ADC1 with raw setup rather than megaTinyCore's analogRead helpers since
@@ -1508,14 +1509,7 @@ void loop() {
 
   ptc_process(millis());
 
-  // Straight to the port: digitalWrite() is ~180 bytes of pin lookup for a
-  // heartbeat LED on a part with no flash to spare.
-  if ((motor_drive_value != 0) ||
-      (millis() % DEBUG_LED_BLINK_PERIOD_MS < DEBUG_LED_BLINK_PERIOD_MS / 4)) {
-    VPORTB.OUT |= LED_bm;
-  } else {
-    VPORTB.OUT &= ~LED_bm;
-  }
+  // No heartbeat blink (local build 1.59): the debug LED stays off.
 
 }
 
