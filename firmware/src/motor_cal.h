@@ -46,9 +46,11 @@ enum MotorCalResult : uint8_t {
 };
 
 // Start a self-calibration run: endpoint sweep first, then the motor
-// characterisation. The caller owns the mode; this owns the motor until it
-// returns something other than MOTORCAL_RUNNING.
-void motorcal_begin(uint32_t now);
+// characterisation. With endpoints_only, just the sweep (up, then down) and
+// the motor characterisation already stored is kept. The caller owns the
+// mode; this owns the motor until it returns something other than
+// MOTORCAL_RUNNING.
+void motorcal_begin(uint32_t now, bool endpoints_only = false);
 
 // Advance one control tick. `adc_raw` is the latest raw (2x accumulated)
 // conversion, used for the endpoint sweep.

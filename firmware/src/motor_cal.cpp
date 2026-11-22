@@ -17,6 +17,7 @@
 
 #include "motor_cal.h"
 #include "motor_control.h"
+#include "selfcal_sweep.h"
 
 MotorCalData motor_cal = {0, {0, 0}, {0, 0}, {0, 0}};
 
@@ -56,6 +57,11 @@ MotorCalData motor_cal = {0, {0, 0}, {0, 0}, {0, 0}};
 // that a 500 us tick's increment doesn't truncate away most of itself.
 #define MOTORCAL_RAMP_STEP \
   (((uint32_t)MOTORCAL_RAMP_RATE * 256 * 4096 + 500000UL) / 1000000UL)
+// Duty the breakaway ramp starts from instead of 0. Every unit measured so far
+// breaks away above ~60 in slow decay, so the ramp skips dead time it would
+// otherwise spend below that. Must stay under the lowest real breakaway, or
+// that unit's breakaway would read as this value.
+#define MOTORCAL_RAMP_START (40)
 #define MOTORCAL_RAMP_MAX (200)         // give up: this unit has no usable breakaway
 #define MOTORCAL_MOTION_VEL (200)       // ADC counts/sec that counts as "moving"
 #define MOTORCAL_JUMP_MS (40)            // window for capturing the Stribeck jump
@@ -80,26 +86,12 @@ MotorCalData motor_cal = {0, {0, 0}, {0, 0}, {0, 0}};
 
 static uint32_t self_calibration_start = 0;
 static uint8_t self_calibration_stage = 0;
-#define SELF_CALIBRATION_TIMEOUT (1500)
+static bool selfcal_quick = false;          // endpoints only, swept up then down
+static uint32_t selfcal_still_since = 0;    // when the carriage last moved
 #define SELF_CALIBRATION_BUFFER (0.995)  // Buffer factor to prevent hitting physical limits
 static uint16_t self_calibration_adc_stage_0 = 0;
 static uint16_t self_calibration_adc_stage_1 = 0;
 
-// Self-calibration runs the endpoint sweep first, then characterises the motor
-// (see the MOTORCAL_* constants). Stages 0-2 are the original endpoint sweep;
-// their numbering is unchanged.
-enum SelfCalStage : uint8_t {
-  SELFCAL_ENDPOINT_LOW = 0,   // drive to the low end, record it
-  SELFCAL_ENDPOINT_HIGH,      // drive to the high end, record it
-  SELFCAL_ENDPOINT_APPLY,     // validate the span, adopt it in RAM
-  SELFCAL_MOTOR_PARK,         // drive to the end this run starts from
-  SELFCAL_MOTOR_SETTLE,       // coast to a genuine stop before measuring
-  SELFCAL_MOTOR_RAMP,         // ramp to breakaway, then hold and capture the jump
-  SELFCAL_MOTOR_DWELL_A,      // hold breakaway + A, measure cruise speed
-  SELFCAL_MOTOR_DWELL_B,      // hold breakaway + B, measure cruise speed
-  SELFCAL_MOTOR_NEXT,         // fold in the run, advance or finish
-  SELFCAL_FINISH,             // derive gains, persist, return to the target
-};
 
 // Motor characterisation working state. Runs alternate direction starting with
 // falling (the endpoint sweep leaves the carriage at the high end), so each run
@@ -198,8 +190,24 @@ static bool motorcal_out_of_band(int8_t dir) {
 }
 
 // Start a self-calibration run at the endpoint sweep.
-void motorcal_begin(uint32_t now) {
-  self_calibration_stage = SELFCAL_ENDPOINT_LOW;
+// Drive toward an end. Full calibration: open loop at full duty. Quick
+// calibration: the speed-limited control law aimed just past the old end, so
+// it travels smoothly and eases into the stop (see endpoint_smooth_target).
+static void motorcal_sweep_drive(SelfCalStage stage, int16_t full_duty) {
+  if (selfcal_quick) {
+    float u = control_law(endpoint_smooth_target(stage, input_calib_min, input_calib_max) - input_ewma,
+                          move_max_velocity);
+    if (u > MOVE_MAX_DUTY) u = MOVE_MAX_DUTY;
+    if (u < -MOVE_MAX_DUTY) u = -MOVE_MAX_DUTY;
+    full_duty = (int16_t)u;
+  }
+  motor_set(full_duty, true, MOTOR_IDLE_COAST);
+}
+
+void motorcal_begin(uint32_t now, bool endpoints_only) {
+  selfcal_quick = endpoints_only;
+  selfcal_still_since = now;
+  self_calibration_stage = endpoint_first_stage(endpoints_only);
   self_calibration_start = now;
 }
 
@@ -218,25 +226,29 @@ MotorCalResult motorcal_tick(uint32_t now, uint16_t adc_raw) {
     motorcal_failed = true;
     self_calibration_stage = SELFCAL_MOTOR_NEXT;
   }
+  // The endpoint stages end once the carriage stops moving against the stop.
+  if (speed > MOTORCAL_MOTION_VEL || speed < -MOTORCAL_MOTION_VEL) selfcal_still_since = now;
   switch (self_calibration_stage) {
     case SELFCAL_ENDPOINT_LOW:
-      if (now > self_calibration_start + SELF_CALIBRATION_TIMEOUT) {
+      if (endpoint_reached(now - self_calibration_start, now - selfcal_still_since)) {
         self_calibration_adc_stage_0 = adc_raw;
-        self_calibration_stage++;
+        self_calibration_stage = endpoint_next_stage(SELFCAL_ENDPOINT_LOW, selfcal_quick);
         self_calibration_start = millis();
+        selfcal_still_since = self_calibration_start;
       } else {
         // Move toward lower ADC value
-        motor_set(-254, true, MOTOR_IDLE_COAST);
+        motorcal_sweep_drive(SELFCAL_ENDPOINT_LOW, -254);
       }
       break;
     case SELFCAL_ENDPOINT_HIGH:
-      if (now > self_calibration_start + SELF_CALIBRATION_TIMEOUT) {
+      if (endpoint_reached(now - self_calibration_start, now - selfcal_still_since)) {
         self_calibration_adc_stage_1 = adc_raw;
-        self_calibration_stage++;
+        self_calibration_stage = endpoint_next_stage(SELFCAL_ENDPOINT_HIGH, selfcal_quick);
         self_calibration_start = millis();
+        selfcal_still_since = self_calibration_start;
       } else {
         // Move toward higher ADC value
-        motor_set(254, true, MOTOR_IDLE_COAST);
+        motorcal_sweep_drive(SELFCAL_ENDPOINT_HIGH, 254);
       }
       break;
     case SELFCAL_ENDPOINT_APPLY:
@@ -250,6 +262,11 @@ MotorCalResult motorcal_tick(uint32_t now, uint16_t adc_raw) {
         // compared against input_ewma, which is in ADC counts.
         input_calib_min = (SELF_CALIBRATION_BUFFER * self_calibration_adc_stage_0 + (1.0 - SELF_CALIBRATION_BUFFER) * self_calibration_adc_stage_1) / 2;
         input_calib_max = (SELF_CALIBRATION_BUFFER * self_calibration_adc_stage_1 + (1.0 - SELF_CALIBRATION_BUFFER) * self_calibration_adc_stage_0) / 2;
+
+        // The quick calibration stops here: the motor characterisation
+        // already in motor_cal (measured by an earlier full calibration, or
+        // the defaults) stays as it is and is persisted with the endpoints.
+        if (selfcal_quick) return MOTORCAL_DONE;
 
         // Endpoints are known, so the motor characterisation that follows
         // has a calibrated span to keep itself inside. Persist once, at the
@@ -289,7 +306,7 @@ MotorCalResult motorcal_tick(uint32_t now, uint16_t adc_raw) {
       // to sustain motion rather than the duty needed to start it.
       motor_brake();
       if (now > self_calibration_start + MOTORCAL_SETTLE_MS) {
-        motorcal_duty = 0;
+        motorcal_duty = (uint16_t)MOTORCAL_RAMP_START << 8;
         motorcal_bd = 0;
         motorcal_vjump = 0;
         self_calibration_stage = SELFCAL_MOTOR_RAMP;

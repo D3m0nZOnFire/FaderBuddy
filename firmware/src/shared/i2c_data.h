@@ -46,7 +46,7 @@
  * different version without touching this default.
  */
 #define FW_VERSION_MAJOR (1)
-#define FW_VERSION_MINOR (5)
+#define FW_VERSION_MINOR (55)  // local test build, not an upstream release
 #ifndef FW_VERSION
 #define FW_VERSION ((FW_VERSION_MAJOR << 8) | FW_VERSION_MINOR)
 #endif
@@ -118,7 +118,9 @@
  * -----|---------------------|---------|------|------------
  * 0x12 | MOTOR_CAL           | R       |u8[12]| Measured motor characteristics (see below)
  * -----|---------------------|---------|------|------------
- * 0x13 | ...                 |         |      | (free - next production register goes here)
+ * 0x13 | CALIB_ENDS          | R       |u16[2]| Calibrated ends, min then max, ADC counts (local test build)
+ * -----|---------------------|---------|------|------------
+ * 0x14 | ...                 |         |      | (free - next production register goes here)
  * -----|---------------------|---------|------|------------
  * 0xF0 | DEBUG_DRIVE         | W       | u8[2]| Open-loop motor drive (DEBUG_DRIVE builds only)
  * -----|---------------------|---------|------|------------
@@ -157,6 +159,12 @@
 #define REG_CLEAR_ERROR 0x05
 #define REG_TOUCH_RAW 0x06
 #define REG_SELF_CAL 0x07
+// Optional data byte for REG_SELF_CAL (firmware 1.53+ of the quick-calibration
+// test build). Without it, or with any other value, the full calibration runs.
+// SELF_CAL_ENDPOINTS_ONLY sweeps up then down to find the ends, smoothly, at the
+// speed in an optional second byte (0-255 like LAYER_TARGET, default full), keeps the stored
+// motor characterisation, and returns to where the fader was standing.
+#define SELF_CAL_ENDPOINTS_ONLY (1)
 #define REG_SERIAL 0x08  // Chip serial number (10 bytes)
 #define REG_TOUCH_DELTA 0x09  // Touch delta (signed 16-bit)
 #define REG_TOUCH_REF 0x0A  // Touch reference value (unsigned 16-bit)
@@ -168,6 +176,7 @@
 #define REG_ENTER_BOOTLOADER 0x10  // Write ENTER_BOOTLOADER_MAGIC (u32 big-endian) to reboot into the bootloader
 #define REG_FW_VERSION 0x11  // Application firmware version (R, u16 big-endian, see FW_VERSION)
 #define REG_MOTOR_CAL 0x12  // Measured motor characteristics (R, 12 bytes, see below)
+#define REG_CALIB_ENDS 0x13  // Calibrated ends (R, u16 min + u16 max big-endian, ADC counts). Local test build 1.55+
 
 /*
  * REG_MOTOR_CAL (0x12) - read-only, 12 bytes.

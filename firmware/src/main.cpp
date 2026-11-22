@@ -191,6 +191,8 @@ volatile uint32_t i2c_outgoing_state = state;
 // ISR -> Main loop communication (incoming requests from I2C writes)
 volatile bool i2c_clear_error_request = false;
 volatile bool i2c_self_cal_request = false;
+volatile bool i2c_self_cal_endpoints_only = false;
+volatile uint8_t i2c_self_cal_speed = LAYER_SPEED_FULL;
 volatile bool i2c_enter_bootloader_request = false;  // set when a valid REG_ENTER_BOOTLOADER arrives
 volatile uint8_t i2c_layer_change_request = 0xFF;  // 0xFF = none, 0-7 = layer
 
@@ -432,6 +434,9 @@ void onI2cRequest() {
       };
       for (uint8_t i = 0; i < 9; i++) i2c_write_u16(vals[i]);
 #endif
+  } else if (r == REG_CALIB_ENDS) {
+      i2c_write_u16(input_calib_min);
+      i2c_write_u16(input_calib_max);
   } else if (r == REG_MOTOR_CAL) {
       const uint8_t vals[12] = {
         motor_cal.valid,
@@ -481,7 +486,9 @@ void onI2cReceive(int howMany) {
       i2c_clear_error_request = true;
       break;
     case REG_SELF_CAL:
-      // Set flag for main loop to process
+      // Set flag for main loop to process. Optional data byte: SELF_CAL_ENDPOINTS_ONLY.
+      i2c_self_cal_endpoints_only = (howMany >= 2) && (Wire.read() == SELF_CAL_ENDPOINTS_ONLY);
+      i2c_self_cal_speed = (howMany >= 3) ? Wire.read() : LAYER_SPEED_FULL;
       i2c_self_cal_request = true;
       break;
     case REG_ACTIVE_LAYER:
@@ -868,7 +875,7 @@ void apply_move_speed(uint8_t speed) {
 // feedforward (plant inverted) plus feedback. Returns signed slow-decay duty,
 // unclamped; the caller owns the deadband and the drive ceiling. See "The
 // control law" in ABOUT_MOTOR_CONTROL.md for the derivation.
-static float control_law(float error, float max_velocity) {
+float control_law(float error, float max_velocity) {
   float sign = (error > 0) ? 1.0f : -1.0f;
   float mag = move_vref_slope * error * sign;   // |v_ref|
   if (max_velocity > MOVE_VEL_UNLIMITED && mag > max_velocity) mag = max_velocity;
@@ -1299,6 +1306,7 @@ void process_i2c_requests() {
 
   self_cal = i2c_self_cal_request;
   i2c_self_cal_request = false;
+  bool self_cal_endpoints_only = i2c_self_cal_endpoints_only;
 
   enter_bootloader = i2c_enter_bootloader_request;
   i2c_enter_bootloader_request = false;
@@ -1356,7 +1364,17 @@ void process_i2c_requests() {
 
   if (self_cal) {
     if (get_mode() != MODE_ERROR) {
-      motorcal_begin(millis());
+      // The quick calibration returns to where the fader is standing now
+      // (calibration ends by moving to the layer's restore position). Not
+      // during a remote move, where the move's target is the better answer.
+      if (self_cal_endpoints_only) {
+        if (get_mode() != MODE_REMOTE_MOVEMENT_IN_PROGRESS) {
+          layer_restore_positions[active_layer] = BOUNDED_LERP_UINT16((uint16_t)input_ewma, input_calib_min, input_calib_max, 0, 255);
+        }
+        // Speed for the smooth sweep and the move back afterwards.
+        apply_move_speed(i2c_self_cal_speed);
+      }
+      motorcal_begin(millis(), self_cal_endpoints_only);
       set_mode(MODE_SELF_CALIBRATION);
     }
   }

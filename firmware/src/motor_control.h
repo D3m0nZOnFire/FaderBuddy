@@ -101,6 +101,10 @@ void motor_brake();
 // host overwrite them at runtime via REG_DEBUG_GAINS.
 extern float move_bd[2];         // breakaway duty, per direction
 extern float move_inv_k[2];      // duty per (ADC count/sec), per direction
+// Cascade control law (main.cpp): signed slow-decay duty, unclamped, for a
+// position error and a speed limit (MOVE_VEL_UNLIMITED for none).
+float control_law(float error, float max_velocity);
+extern float move_max_velocity;
 extern float move_kv;            // velocity loop gain
 extern int16_t move_takeup_duty;
 extern float move_deadband;
