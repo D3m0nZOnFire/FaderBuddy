@@ -301,9 +301,16 @@ class FaderBuddy : public PollingComponent, public i2c::I2CDevice {
         // enough to get several 64-byte pages out per loop iteration, short
         // enough that nothing else notices.
         static constexpr uint32_t UPDATE_WRITE_BUDGET_MS = 20;
+        // The bootloader computes the image CRC (~15 KB, tens of ms) inside its polled
+        // TWI loop: a read addressed to it meanwhile is clock-stretched for the whole
+        // computation, long enough for the host's I2C transfer to time out and leave the
+        // bus wedged. So don't poll before it can be done. (A slow host loop, e.g. with
+        // Wi-Fi, used to hide this; a fast one polls within the first millisecond.)
+        static constexpr uint32_t UPDATE_CRC_SETTLE_MS = 200;
 
         UpdateStage update_stage_{UPDATE_IDLE};
         uint32_t update_deadline_{0};   // millis deadline for the polling stages
+        uint32_t update_stage_start_{0};  // millis when the current stage began
         uint32_t update_page_{0};       // next page to write
         uint8_t update_progress_pct_{0xFF};  // last published step; 0xFF = none yet
 

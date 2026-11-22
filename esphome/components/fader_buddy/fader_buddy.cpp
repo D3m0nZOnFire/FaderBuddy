@@ -995,6 +995,7 @@ void FaderBuddy::begin_update_() {
 // work in one tick and sets the next stage itself.
 void FaderBuddy::enter_update_stage_(UpdateStage stage, uint32_t timeout_ms) {
   update_stage_ = stage;
+  update_stage_start_ = millis();
   update_deadline_ = millis() + timeout_ms;
 }
 
@@ -1266,11 +1267,14 @@ void FaderBuddy::update_tick_() {
       // The bootloader computes the CRC over the whole range after releasing the
       // bus (it can't clock-stretch the whole computation), then NAKs reads
       // until it's done.
-      enter_update_stage_(UPDATE_CRC_WAIT, 1000);
+      enter_update_stage_(UPDATE_CRC_WAIT, UPDATE_CRC_SETTLE_MS + 1000);
       return;
     }
 
     case UPDATE_CRC_WAIT: {
+      if (millis() - update_stage_start_ < UPDATE_CRC_SETTLE_MS) {
+        return;  // still computing: a read now would be stretched past the I2C timeout
+      }
       uint16_t crc;
       if (bl_poll_image_crc16_(crc)) {
         if (crc != firmware_image_crc16_) {
