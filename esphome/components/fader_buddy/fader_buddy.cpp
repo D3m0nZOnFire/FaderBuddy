@@ -1281,12 +1281,16 @@ void FaderBuddy::update_tick_() {
         finish_update_(false, "crc request failed");
         return;
       }
-      enter_update_stage_(UPDATE_BODY_CRC_WAIT, 1000);
+      // Same clock-stretch hazard as UPDATE_CRC_WAIT: let the CRC finish first.
+      enter_update_stage_(UPDATE_BODY_CRC_WAIT, UPDATE_CRC_SETTLE_MS + 1000);
       return;
     }
 
     case UPDATE_BODY_CRC_WAIT: {
       if (firmware_image_length_ > BL_PAGE_SIZE) {
+        if (millis() - update_stage_start_ < UPDATE_CRC_SETTLE_MS) {
+          return;  // still computing: a read now would be stretched past the I2C timeout
+        }
         uint16_t crc;
         if (!bl_poll_image_crc16_(crc)) {
           if (timed_out) {
