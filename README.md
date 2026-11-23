@@ -1,3 +1,11 @@
+> [!WARNING]
+> **This is not the official FaderBuddy repository.** It is a personal fork of
+> [scottbez1/FaderBuddy](https://github.com/scottbez1/FaderBuddy) with experimental changes for a
+> desk mixer project (branch `quick-calibration`: quick calibration, spring-to-minimum haptic,
+> firmware update timing fix). These are local test builds, not upstream releases.
+> For the official firmware, hardware files, documentation and support, use the
+> [official repository](https://github.com/scottbez1/FaderBuddy).
+
 # FaderBuddy
 
 The FaderBuddy is a modular control board for 60mm motorized linear potentiometers, making it simple to add
