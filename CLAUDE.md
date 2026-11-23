@@ -57,10 +57,12 @@ source ~/.platformio/penv/bin/activate
 
 Then you can use PlatformIO commands - make sure to cd to the repo root before running these (there are multiple platformio setups within the repo).
 ```bash
-# Build firmware
+# Build firmware (default_envs: the bootloader and the offset application)
 pio run
 
-# Upload firmware via UPDI (default port: /dev/ttyUSB0)
+# Upload firmware via UPDI (port: upload_port in platformio.ini). Uploads the
+# bootloader then the application, in that order - see "Firmware (I2C
+# bootloader)" below for uploading either one alone.
 pio run --target upload
 
 # Monitor serial output (default port: /dev/ttyUSB1)
@@ -71,6 +73,7 @@ pio run --target clean
 
 # System-identification build, adding the debug registers used to measure the
 # motor. Not for production - it lets a host drive the H-bridge directly.
+# Linked at 0x0000: uploading erases the bootloader and clears its fuses.
 pio run -e fader_buddy_lab --target upload
 ```
 
@@ -86,7 +89,10 @@ Generally we don't have the serial RX/TX lines hooked up, so prefer to debug fir
 ### Firmware (I2C bootloader)
 
 See `ABOUT_I2C_BOOTLOADER.md` for how the bootloader works and what is still
-missing from it. All of these run from the repo root with the PlatformIO env
+missing from it. The flash geometry (boot/app split, footer address) lives in
+`bootloader_protocol.h`; the few places that must repeat it by hand are listed
+under "Hardcoded copies of the flash geometry" in that doc - keep that list
+current, with a pointer comment beside each copy. All of these run from the repo root with the PlatformIO env
 activated.
 
 ```bash
@@ -97,12 +103,15 @@ pio run -e fb_bootloader_only -t upload
 # bootloader. This is the day-to-day iteration path.
 pio run -e fb_app_only -t upload
 
-# Blank-chip / recovery flash: bootloader + offset app + fuses in one UPDI upload
-pio run -e fb_app_and_bootloader -t upload
+# Blank-chip / recovery flash: the two commands above, bootloader FIRST (its
+# upload chip-erases, so running it second would wipe the app). A bare
+# `pio run -t upload` does the same, via default_envs in platformio.ini.
 
 # Read flash back over UPDI as ground truth (offset is a flash byte address;
 # 0x600 = BL_APP_START). Prefer this over the bootloader's own mapped-flash
 # reads, which can return stale page-buffer bytes right after a write.
+# (0x600 is a hardcoded copy of the flash geometry - see "Hardcoded copies of
+# the flash geometry" in ABOUT_I2C_BOOTLOADER.md.)
 pymcuprog read -d attiny1616 -t uart -u /dev/ttyUSB2 -m flash -o 0x600 -b 64
 
 # Read the fuse row (byte 7 = APPEND, byte 8 = BOOTEND)
@@ -399,7 +408,7 @@ When modifying the I2C protocol, ensure changes are compatible across all consum
 ## Hardware Details
 
 - **MCU**: ATtiny1616 @ 20MHz
-- **Programming**: UPDI interface (uses pyupdi tool, auto-installed via PlatformIO extra_scripts)
+- **Programming**: UPDI interface (uses pymcuprog via `firmware/tools/flash_with_fuses.py`, auto-installed via PlatformIO extra_scripts)
 - **Motor Driver**: H-bridge with PWM control, configurable frequency via TCA0 timer
 - **Position Feedback**: Potentiometer (ADC input with EWMA filtering)
 - **Touch Sensing**: Capacitive touch via ptc_touch library
